@@ -1,0 +1,264 @@
+#Step 1: Import Raw Data
+library("jsonlite", lib.loc="~/R/win-library/3.2")
+#Set the working directory to where you have saved the 4 raw data files from the README on this repository. 
+#I have listed my working directory below.
+setwd("C:/Users/sam/Desktop/Yelp/yelp_dataset_challenge_academic_dataset")
+
+#A) Get all yelp business information
+WBid <- fromJSON(sprintf("[%s]", paste(readLines("yelp_academic_dataset_business.json"), collapse=",")))
+#Narrow down business information to waterloo, cambridge and kitchener
+temp<-WBid[WBid$city=="Waterloo",]
+c1<-cbind(temp$business_id,temp$full_address,temp$review_count,temp$name)
+c1<-data.frame(c1)
+names(c1)<-c("business_id","full_address","review_count","name")
+temp<-WBid[WBid$city=="Cambridge",]
+c3<-cbind(temp$business_id,temp$full_address,temp$review_count,temp$name)
+c3<-data.frame(c3)
+names(c3)<-c("business_id","full_address","review_count","name")
+temp<-WBid[WBid$city=="Kitchener",]
+c2<-cbind(temp$business_id,temp$full_address,temp$review_count,temp$name)
+c2<-data.frame(c2)
+names(c2)<-c("business_id","full_address","review_count","name")
+#Bring together records from different cities
+bidlist<-data.frame(rbind(c1,c2,c3))
+#remove restaurants that show up more than once (i.e. franchises and chains)
+library(tm)
+bidlist$name<-tolower(bidlist$name)
+bidlist$name<-removePunctuation(bidlist$name)
+ubidlist<-subset(bidlist,!duplicated(bidlist$name))
+
+#B) Get Health Inspection Business Data
+IFac<-read.csv("Facilities_OpenData.csv")
+IFac$BUSINESS_NAME<-tolower(IFac$BUSINESS_NAME)
+IFac$BUSINESS_NAME<-removePunctuation(IFac$BUSINESS_NAME)
+IFac$CITY<-tolower(IFac$CITY)
+IFac$CITY<-as.factor(IFac$CITY)
+#Narrow down business information to waterloo, cambridge and kitchener
+hc1<-IFac[IFac$CITY=="waterloo",]
+hc2<-IFac[IFac$CITY=="kitchener",]
+hc3<-IFac[IFac$CITY=="cambridge",]
+WIFac<-data.frame(rbind(hc1,hc2,hc3))
+WIFac$FACILITYID<-as.character(WIFac$FACILITYID)
+WIFac$ADDR<-as.character(WIFac$ADDR)
+WIFac$BUSINESS_NAME<-as.character(WIFac$BUSINESS_NAME)
+WIFac$CITY<-as.character(WIFac$CITY)
+ODB<-WIFac[,c(1,2,4,5)]
+ODB<-WIFac[,c(1,2,4,5)]
+ODB[,3]<-tolower(ODB[,3])
+ODB[,2]<-tolower(ODB[,2])
+#remove restaurants that show up more than once (i.e. franchises and chains)
+uhbidlist<-subset(ODB,!duplicated(ODB$BUSINESS_NAME))
+
+#C) Get Merged list of Yelp and Health Business Data (i.e. All businesses that appear on both the Yelp and Health Inspection Lists
+MergedBusiness<-merge(uhbidlist,ubidlist,by.x="BUSINESS_NAME",by.y="name")
+MergedBusiness$business_id <-as.character(MergedBusiness$business_id)
+MergedBusiness$full_address<-as.character(MergedBusiness$full_address)
+MergedBusiness$review_count <-as.numeric(MergedBusiness$review_count)
+#cleanup chains remaining
+MergedBusiness<-MergedBusiness[-c(54,74,87,88,105,112,120,121),]
+
+#D) Get Yelp Reviews
+
+revlist <- fromJSON(sprintf("[%s]", paste(readLines("revlist.json"), collapse=",")))
+YR<-data.frame(revlist$date,revlist$text,revlist$business_id)
+names(YR)<-c("date","text","business_id")
+YR$date<-as.Date(YR$date)
+YR$text<-as.character(YR$text)
+YR$business_id<-as.character(YR$business_id)
+
+#E) Get Health Inspection Results
+IIns<-read.csv("Inspections_OpenData.csv")
+ODI<-IIns[,c(2,3,4,8)]
+ODI[,2]<-as.Date(ODI[,2])
+ODI[,4]<-as.character(ODI[,4])
+ODI2<-aggregate(ODI$INSPECTION_DATE,by=list(ODI$FACILITYID),max)
+names(ODI2)<-c("FACILITYID","INSPECTION_DATE")
+ODI3<-merge(ODI,ODI2,by=c("FACILITYID","INSPECTION_DATE"))
+
+#F) Merge Business Data and Health Inspection Results
+MergedBusinessAndHI<-merge(MergedBusiness,ODI3,by.x="FACILITYID",by.y="FACILITYID")
+MergedBusinessAndHI$business_id<-as.character(MergedBusinessAndHI$business_id)
+MergedBusinessAndHI2<-data.frame(cbind(MergedBusinessAndHI$FACILITYID, MergedBusinessAndHI$BUSINESS_NAME,MergedBusinessAndHI$business_id, MergedBusinessAndHI$Actions))
+names(MergedBusinessAndHI2)<-c("FACILITYID","BUSINESS_NAME","business_id", "Actions")
+MergedBusinessAndHI2$FACILITYID<-as.character(MergedBusinessAndHI2$FACILITYID)
+MergedBusinessAndHI2$BUSINESS_NAME<-as.character(MergedBusinessAndHI2$BUSINESS_NAME)
+MergedBusinessAndHI2$business_id<-as.character(MergedBusinessAndHI2$business_id)
+MergedBusinessAndHI2$Actions<-as.character(MergedBusinessAndHI2$Actions)
+MergedBusinessAndHI2<-MergedBusinessAndHI2[-c(91, 60),]
+
+#G) Merge Business Data, Health Inspection Results, and Review Text
+AllData<-merge(MergedBusinessAndHI2,YR,by.x="business_id",by.y="business_id")
+
+#H) Extract just the Text Reviews and Health Inspection Information
+HIandYelp<- AllData[,c(4,6)]
+HIandYelpC3<-c(HIandYelp[,1]=="")
+HIandYelp<-cbind(HIandYelp,HIandYelpC3)
+
+#I) Label the Health Inspection Results and Action/No Action
+FinalData<-HIandYelp
+FinalData["InspectionResults"]<-NA
+for(i in 1:nrow(FinalData)) 
+{
+  if (FinalData[i,3]=="TRUE")
+  {
+    FinalData[i,4]<-c("No Action")
+  }
+  else
+  {
+    FinalData[i,4]<-c("Action")
+  }
+}
+FinalData<-data.frame(FinalData[,c(2,4)])
+FinalData[,1]<-as.character(FinalData[,1])
+FinalData[,2]<-as.factor(FinalData[,2])
+docs<-data.frame(FinalData[,1])
+
+#Step 2. Build document term matrix
+library(tm)
+library(SnowballC)
+library(RWeka)
+
+actual<-cbind(FinalData[,1])
+dfactual<-data.frame(actual)
+dsactual<-DataframeSource(dfactual)
+
+#A)Create a Corpus
+Corpus7<-VCorpus(dsactual)
+
+#B)Create a Document Term Matrix
+dtmactual <- DocumentTermMatrix(Corpus7, control = list(stopwords = TRUE, stripWhitespace=TRUE, removePunctuation = TRUE, stopwords = TRUE, stemming=TRUE))
+
+#C)Turn the document term matrix into a dataframe
+dtmdf<-data.frame(inspect(dtmactual))
+
+
+#D)Attempt at creating a TfIdf weighted document term matrix. Computer was unable to handle to volume of work.
+#Funtfdtm<-function(i,j,dtmdf){dtmdf[i,j]/sum(dtmdf[i,]>0)}
+#VecFunTf<-Vectorize(Funtfdtm,vectorize.args=c('i','j'))
+#FunIdfdtm<-function(i,j,dtmdf){log(nrow(dtmdf)/sum(dtmdf[,j]>0))}
+#VecFunIdf<-Vectorize(FunIdfdtm,vectorize.args=c('i','j'))
+#tfdtm<-outer(1:nrow(dtmdf),1:ncol(dtmdf),VecFunTf,dtmdf)
+#idfdtm<-outer(1:nrow(dtmdf),1:ncol(dtmdf),VecFunIdf,dtmdf)
+#tfidfdtm<-tfdtm/idfdtm
+
+#E) use built in function to create a TfIdf weighted document matrix
+weightdtm<-weightTfIdf(dtmactual, normalize = TRUE)
+weightdtmdf<-data.frame(inspect(weightdtm))
+
+#F) Label the dataframe again with classes
+dtmdfcl<-cbind(weightdtmdf,FinalData[,2])
+dfcols<-ncol(dtmdfcl)
+dtmdfcl[dfcols]<-as.factor(dtmdfcl[[dfcols]])
+names(dtmdfcl)[dfcols] <- "Class"
+
+#G) set rows for training and test sets:
+traintestrows<- sample(nrow(docs), size = nrow(docs), replace = FALSE)
+traintestrows<-as.character(traintestrows)
+traintestrows<-as.vector(traintestrows)
+numtrainrows<-nrow(docs)*.7
+trainrowid<-paste(traintestrows[1:numtrainrows], sep=",")
+testrowid<-paste(traintestrows[-(1:numtrainrows)], sep=",")
+
+#H) Create test and training sets
+train <- dtmdfcl[trainrowid,]
+test <- dtmdfcl[testrowid,]
+
+
+#Step 3: Perform Naive Bayes Classification on full DTM
+library(e1071)
+nbmodel <- naiveBayes(Class~., data=train)
+nbpredictions <- predict(nbmodel, test)
+
+#A)Review results of Naïve Bayes Classification
+library(caret)
+library(stringi)
+confusionMatrix(test[,dfcols],nbpredictions)
+table(nbpredictions)
+table(test[,dfcols])
+
+#B)Redo Naïve Bayes with Reduced Features
+#Reduce Naïve Bayes to terms with top 200 weights
+sumWeight<-data.frame(rbind(colSums(weightdtmdf)))
+nsw<-rbind(names(sumWeight),sumWeight)
+nsw[2,]<-as.numeric(nsw[2,])
+nsw[1,]<-as.character(nsw[1,])
+top200<-order(nsw[2,],decreasing=T)[1:200]
+top200<-as.numeric(top200)
+Rdtmdf<-dtmdfcl[,c(top200)]
+#Label the new list of terms
+Rdtmdfcl<-cbind(Rdtmdf,FinalData[,2])
+dfcols<-ncol(Rdtmdfcl)
+Rdtmdfcl[dfcols]<-as.factor(Rdtmdfcl[[dfcols]])
+names(Rdtmdfcl)[dfcols] <- "Class"
+#Create test and training sets
+Rtrain <- Rdtmdfcl[trainrowid,]
+Rtest <- Rdtmdfcl[testrowid,]
+#Perform Naive Bayes on reduced dataset
+library(e1071)
+nbmodel <- naiveBayes(Class~., data=Rtrain)
+nbpredictions <- predict(nbmodel, Rtest)
+#Review results of Naïve Bayes
+library(caret)
+library(stringi)
+confusionMatrix(Rtest[,dfcols],nbpredictions)
+table(nbpredictions)
+table(Rtest[,dfcols])
+
+
+#Step 4: Begin topic modelling
+
+library(topicmodels)
+
+#A) Use built in function to create a TfIdf weighted document matrix
+TFdtm<-weightTf(dtmactual)
+
+#B) Get topics using LDA
+LDASet<-LDA(TFdtm,20,alpha=3.5)
+#Get posterior topic distribution for each document
+ProbLDASet<-posterior(LDASet)
+
+#Extract the portion of the posterior topic distribution matrix to be used in SVM, and label them by topic
+TopicForSVM<-data.frame(ProbLDASet$topics)
+colnames(TopicForSVM) <- apply(terms(LDASet,5),2,paste,collapse=",")
+
+#Step 5: Use the LDA values with the DTM values for SVM classification (Apply SVM Classification to DTM and LDA topics)
+
+#A) Create the dataset with LDA values and DTM values and Class values
+TFdtmdf<-data.frame(inspect(TFdtm))
+SVMSet<-cbind(TFdtmdf,TopicForSVM,FinalData[,2])
+SVMSetCol<-ncol(SVMSet)
+names(SVMSet)[SVMSetCol] <- "Class"
+#B) Create Testing Set
+SVMtest <- SVMSet[testrowid,]
+
+#C) Run SVM classifier data set.
+svmmodel <- svm(Class ~ ., data = SVMSet)
+svmpredictions <- predict(svmmodel, SVMtest)
+confusionMatrix(SVMtest[,SVMSetCol],svmpredictions)
+#Review results of svm
+table(svmpredictions)
+table(SVMtest[,SVMSetCol])
+
+# D)Feature Reduced SVM Classification to DTM and LDA topics
+#Reduce Features
+sumSVM<-data.frame(rbind(colSums(TFdtmdf)))
+nss<-rbind(names(sumSVM),sumSVM)
+nss[2,]<-as.numeric(nss[2,])
+nss[1,]<-as.character(nss[1,])
+top200svm<-order(nss[2,],decreasing=T)[1:200]
+top200svm<-as.numeric(top200svm)
+Rdtmdf<-dtmdfcl[,c(top200svm)]
+#Combine with LDA topics and label the new list of terms
+RTFdtmdfcl<-cbind(TFdtmdf, TopicForSVM, FinalData[,2])
+TFdfcols<-ncol(RTFdtmdfcl)
+RTFdtmdfcl[TFdfcols]<-as.factor(RTFdtmdfcl[[TFdfcols]])
+names(RTFdtmdfcl) [TFdfcols] <- "Class"
+#Create test set
+RTFtest <- RTFdtmdfcl[testrowid,]
+#Run SVM classifier on test set.
+svmmodel <- svm(Class ~ ., data = RTFdtmdfcl)
+svmpredictions <- predict(svmmodel, RTFtest)
+#Review results of svm
+confusionMatrix(RTFtest[,TFdfcols],svmpredictions)
+table(svmpredictions)
+table(RTFtest[,TFdfcols])
